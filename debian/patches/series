@@ -1,0 +1,7 @@
+fix-xterm-keybinding.patch
+fix-startup-check-fbautostart.patch
+fluxbox-1.3.7-c++17.patch
+fix_ld_ftbfs.patch
+replace_FbRootWindow_depth_with_maxDepth.patch
+fluxbox-flux.patch
+ewmh-partial-struts.patch

@@ -1,0 +1,43 @@
+MiniOS Fluxbox package
+=====================
+
+Upstream baseline: Release-1_3_7, commit
+88a74ff1cde22be3e894498ffd88934dc92dfef0.
+The upstream version remains 1.3.7. debian/changelog owns the package revision.
+The original MiniOS 1.3.7-1 quilt series is preserved; local changes belong in
+additional Debian patches, not generated upstream files.
+
+The Git tag does not contain the release tarball's generated manuals and
+Autotools files. Prepare a build/source-package directory outside this checkout:
+
+    ./debian/prepare-source /absolute/build/path/fluxbox-flux
+    cd /absolute/build/path/fluxbox-flux
+    dpkg-source -b .
+
+The preparation command verifies the published original tarball's SHA-256.
+No source or binary package artifacts should be written inside this repository.
+Use the MiniOS build-minios-packages skill for development containers and final
+clean Bionic amd64/i386 and Trixie amd64 builds. Debhelper compatibility is 11;
+no runtime dependencies were added for the panel fix.
+
+Tests
+-----
+The normal package build retains upstream make check and runs the standalone
+head-geometry regression suite. To exercise actual X properties, window sizes,
+fullscreen, invalid input, property deletion and panel replacement, run in a
+clean build directory with an isolated X server (xvfb and xauth are test tools):
+
+    xvfb-run -a -s '-screen 0 1280x800x24 -nolisten tcp' \
+        debian/tests/check-struts ./fluxbox
+
+Never run this synthetic-panel test against a user's desktop. The real MiniOS
+session must also be checked with xfce4-panel, including resize and restart.
+
+Desktop integration
+-------------------
+MiniOS's 04-flux-desktop skeleton owns the panel defaults and startup scripts.
+Panels must publish their own struts: disable-struts=false on old Xfce panels,
+enable-struts=true on new ones. The skeleton leaves these at the enabled default.
+A package upgrade does not rewrite existing users' panel preferences or startup
+scripts. Existing sessions need that preference enabled and the old fixed xprop
+reservation removed. Fullscreen remains distinct from maximization.

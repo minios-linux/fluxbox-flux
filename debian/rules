@@ -1,0 +1,14 @@
+#!/usr/bin/make -f
+
+RULE_FILES=$(shell ls debian/rules.d/*.mk | sort -n)
+
+include $(RULE_FILES)
+
+%:
+	dh $@ --with autoreconf
+
+# Keep upstream checks enabled, then run the head-geometry regression suite.
+override_dh_auto_test:
+	dh_auto_test
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -std=c++11 -Isrc debian/tests/strut-geometry.cc $(LDFLAGS) -o debian/strut-geometry-test
+	./debian/strut-geometry-test

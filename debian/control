@@ -1,0 +1,28 @@
+Source: fluxbox-flux
+Section: x11
+Priority: optional
+Maintainer: crims0n <crims0n@minios.dev>
+Build-Depends: autoconf, automake, bzip2, debhelper (>= 11),
+ libfribidi-dev, libimlib2-dev, libtool,
+ libx11-dev, libxext-dev, libxft-dev, libxinerama-dev, libxpm-dev,
+ libxrandr-dev, libxt-dev, libxrender-dev
+Standards-Version: 4.6.2
+Homepage: https://fluxbox.org
+Vcs-Git: https://github.com/minios-linux/fluxbox-flux.git
+Vcs-Browser: https://github.com/minios-linux/fluxbox-flux
+
+Package: fluxbox-flux
+Architecture: any
+Provides: x-window-manager
+Conflicts: fluxbox
+Replaces: fluxbox
+Recommends: xfonts-terminus, feh | eterm | hsetroot | xloadimage
+Suggests: fbpager, fbdesk, fbautostart
+Depends: menu (>=2.1.19), ${shlibs:Depends}, ${misc:Depends}
+Description: Highly configurable and low resource X11 Window manager
+ Fairly similar to blackbox, from which it is derived, but has been
+ extended with features such as pwm-style window tabs, configurable
+ key bindings, toolbar, and an iconbar. It also includes some cosmetic
+ fixes over blackbox.
+ .
+ This package contains support for GNOME and KDE.

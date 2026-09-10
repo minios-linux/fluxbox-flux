@@ -1,0 +1,65 @@
+Index: fluxbox-1.3.7/src/Window.cc
+===================================================================
+--- fluxbox-1.3.7.orig/src/Window.cc
++++ fluxbox-1.3.7/src/Window.cc
+@@ -2747,6 +2747,14 @@ void FluxboxWindow::startMoving(int x, i
+     m_button_grab_x = x - frame().x() - frame().window().borderWidth();
+     m_button_grab_y = y - frame().y() - frame().window().borderWidth();
+ 
++    // If mouse clicked on the border, start window resize instead of move
++    if (m_button_grab_x <= 0 || m_button_grab_x >= (int)frame().window().width()
++        || m_button_grab_y >= (int)frame().window().height() ) {
++        ReferenceCorner dir = getResizeDirection(m_button_grab_x,m_button_grab_y,EDGEORCORNERRESIZE,frame().window().borderWidth(),frame().window().borderWidth());
++        startResizing(m_button_grab_x, m_button_grab_y, dir);
++        return;
++    }
++
+     moving = true;
+ 
+     Fluxbox *fluxbox = Fluxbox::instance();
+@@ -2754,7 +2762,7 @@ void FluxboxWindow::startMoving(int x, i
+     // freely map and unmap the window we're moving.
+     grabPointer(screen().rootWindow().window(), False, ButtonMotionMask |
+                 ButtonReleaseMask, GrabModeAsync, GrabModeAsync,
+-                screen().rootWindow().window(), frame().theme()->moveCursor(), CurrentTime);
++                screen().rootWindow().window(), None, CurrentTime);
+ 
+     if (menu().isVisible())
+         menu().hide();
+Index: fluxbox-1.3.7/src/FbTk/FbDrawable.hh
+===================================================================
+--- fluxbox-1.3.7.orig/src/FbTk/FbDrawable.hh
++++ fluxbox-1.3.7/src/FbTk/FbDrawable.hh
+@@ -52,7 +52,8 @@ public:
+         LEFT,
+         RIGHT,
+         UP,
+-        DOWN
++        DOWN,
++        MENU
+     };
+ 
+     // x, y, width and height define a space within which we're drawing a triangle
+Index: fluxbox-1.3.7/src/ToolFactory.cc
+===================================================================
+--- fluxbox-1.3.7.orig/src/ToolFactory.cc
++++ fluxbox-1.3.7/src/ToolFactory.cc
+@@ -105,6 +105,8 @@ ToolbarItem *ToolFactory::create(const s
+             cmd_str += " (workspace=[current])";
+         }
+ 
++        if (name.find("menu") != std::string::npos) cmd_str = "Exec fbappselect";
++
+         FbTk::RefCount<FbTk::Command<void> > cmd(cp.parse(cmd_str));
+         if (cmd == 0) // we need a command
+             return 0;
+@@ -114,6 +116,9 @@ ToolbarItem *ToolFactory::create(const s
+         if (name.find("prev") != std::string::npos)
+             arrow_type = FbTk::FbDrawable::LEFT;
+ 
++        if (name.find("menu") != std::string::npos)
++        arrow_type = FbTk::FbDrawable::MENU;
++
+         ArrowButton *win = new ArrowButton(arrow_type, parent,
+                                            0, 0,
+                                            button_size, button_size);

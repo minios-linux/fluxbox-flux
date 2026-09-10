@@ -1,0 +1,306 @@
+Description: Honor partial panel struts and update them with screen geometry
+ Reserve each intersecting monitor, prefer PARTIAL over the legacy property,
+ validate X properties, and release reservations on change or removal.
+ Includes the RandR event selection fix from upstream commit
+ 36f99b92464abd389d815dbf29a65d740b8145c6 (2026-02-15).
+Author: MiniOS Developers
+Forwarded: no
+Last-Update: 2026-09-10
+
+--- /dev/null
++++ b/src/EwmhStrut.hh
+@@ -0,0 +1,44 @@
++// EWMH strut geometry. Distributed under the Fluxbox MIT license (COPYING).
++#ifndef EWMHSTRUT_HH
++#define EWMHSTRUT_HH
++
++#include <algorithm>
++
++namespace EwmhStrut {
++
++// The property uses root coordinates, not offsets from the panel's monitor.
++// Use wide arithmetic: X CARDINAL values can reach UINT32_MAX on i386 too.
++inline int edge(unsigned long depth, unsigned long start, unsigned long end,
++                int root_size, int offset, int size,
++                int cross_offset, int cross_size, bool far_edge) {
++    if (!depth || start > end || root_size <= 0 || size <= 0 || cross_size <= 0
++        || static_cast<long long>(end) < cross_offset
++        || static_cast<long long>(start) >= static_cast<long long>(cross_offset) + cross_size)
++        return 0;
++    const long long d = std::min(depth, static_cast<unsigned long>(root_size));
++    const long long amount = far_edge
++        ? static_cast<long long>(offset) + size - (root_size - d)
++        : d - offset;
++    return static_cast<int>(std::max(0LL, std::min(amount, static_cast<long long>(size))));
++}
++
++inline void clamp(int width, int height, int (&area)[4]) {
++    // Keep malformed or mutually overlapping reservations from underflowing
++    // the unsigned window sizes used by the maximization code.
++    area[0] = std::min(area[0], std::max(0, width - 1));
++    area[1] = std::min(area[1], std::max(0, width - area[0] - 1));
++    area[2] = std::min(area[2], std::max(0, height - 1));
++    area[3] = std::min(area[3], std::max(0, height - area[2] - 1));
++}
++
++inline void partial(const unsigned long *v, int root_width, int root_height,
++                    int x, int y, int width, int height, int (&area)[4]) {
++    area[0] = edge(v[0], v[4], v[5], root_width, x, width, y, height, false);
++    area[1] = edge(v[1], v[6], v[7], root_width, x, width, y, height, true);
++    area[2] = edge(v[2], v[8], v[9], root_height, y, height, x, width, false);
++    area[3] = edge(v[3], v[10], v[11], root_height, y, height, x, width, true);
++    clamp(width, height, area);
++}
++
++} // namespace EwmhStrut
++#endif
+--- a/src/Ewmh.cc
++++ b/src/Ewmh.cc
+@@ -20,6 +20,7 @@
+ // DEALINGS IN THE SOFTWARE.
+ 
+ #include "Ewmh.hh"
++#include "EwmhStrut.hh"
+ 
+ #include "Screen.hh"
+ #include "Window.hh"
+@@ -62,6 +63,25 @@
+ 
+ 
+ namespace {
++
++// Read the complete property, validate its type and length, and always free
++// Xlib's allocation (32-bit properties are returned as native unsigned longs).
++bool readStrut(WinClient &client, Atom atom, unsigned long *values, unsigned long count) {
++    Atom type = None;
++    int format = 0;
++    unsigned long items = 0, remaining = 0;
++    unsigned char *raw = 0;
++    const bool success = client.property(atom, 0, count, False, XA_CARDINAL,
++                                         &type, &format, &items, &remaining, &raw);
++    const bool valid = success && raw && type == XA_CARDINAL && format == 32
++                       && items == count && remaining == 0;
++    if (valid)
++        std::copy(reinterpret_cast<unsigned long *>(raw),
++                  reinterpret_cast<unsigned long *>(raw) + count, values);
++    if (raw)
++        XFree(raw);
++    return valid;
++}
+ 
+ /* From Extended Window Manager Hints, draft 1.3:
+  *
+@@ -371,6 +391,7 @@
+         wm_action_close = XInternAtom(disp, "_NET_WM_ACTION_CLOSE", False);
+ 
+         wm_strut = XInternAtom(disp, "_NET_WM_STRUT", False);
++        wm_strut_partial = XInternAtom(disp, "_NET_WM_STRUT_PARTIAL", False);
+         wm_icon_geometry = XInternAtom(disp, "_NET_WM_ICON_GEOMETRY", False);
+         wm_icon = XInternAtom(disp, "_NET_WM_ICON", False);
+         wm_pid = XInternAtom(disp, "_NET_WM_PID", False);
+@@ -447,6 +468,7 @@
+          wm_action_close,
+ 
+          wm_strut,
++         wm_strut_partial,
+          wm_icon_geometry,
+          wm_icon,
+          wm_pid,
+@@ -486,6 +508,7 @@
+ }
+ 
+ void Ewmh::initForScreen(BScreen &screen) {
++    join(screen.resizeSig(), FbTk::MemFun(*this, &Ewmh::updateScreenSize));
+     Display *disp = FbTk::App::instance()->display();
+ 
+     /* From Extended Window Manager Hints, draft 1.3:
+@@ -523,6 +546,7 @@
+     Atom atomsupported[] = {
+         // window properties
+         m_net->wm_strut,
++        m_net->wm_strut_partial,
+         m_net->wm_state,
+         m_net->wm_name,
+         m_net->wm_icon,
+@@ -1270,7 +1294,7 @@
+ 
+ 
+ bool Ewmh::propertyNotify(WinClient &winclient, Atom the_property) {
+-    if (the_property == m_net->wm_strut) {
++    if (the_property == m_net->wm_strut || the_property == m_net->wm_strut_partial) {
+         updateStrut(winclient);
+         return true;
+     } else if (the_property == m_net->wm_name) {
+@@ -1389,23 +1413,50 @@
+ 
+ 
+ void Ewmh::updateStrut(WinClient &winclient) {
+-    Atom ret_type = 0;
+-    int fmt = 0;
+-    unsigned long nitems = 0, bytes_after = 0;
+-    long *data = 0;
+-    if (winclient.property(m_net->wm_strut, 0, 4, False, XA_CARDINAL,
+-                                 &ret_type, &fmt, &nitems, &bytes_after,
+-                                 (unsigned char **) &data) && data) {
+-
+-        int head = winclient.screen().getHead(winclient);
+-        winclient.setStrut(winclient.screen().requestStrut(head,
+-                           data[0], data[1],
+-                           data[2], data[3]));
+-        winclient.screen().updateAvailableWorkspaceArea();
+-    }
+-}
+-
+-
++    BScreen &screen = winclient.screen();
++    unsigned long values[12] = {0};
++    Strut *strut = 0;
++    if (readStrut(winclient, m_net->wm_strut_partial, values, 12)) {
++        // A single panel may span several heads. Reserve only the intersecting
++        // edges and link all reservations to the client for replacement/cleanup.
++        const int heads = std::max(1, screen.numHeads());
++        for (int head = 1; head <= heads; ++head) {
++            int area[4];
++            EwmhStrut::partial(values, screen.width(), screen.height(),
++                              screen.getHeadX(head), screen.getHeadY(head),
++                              screen.getHeadWidth(head), screen.getHeadHeight(head), area);
++            if (area[0] || area[1] || area[2] || area[3])
++                strut = screen.requestStrut(head, area[0], area[1], area[2], area[3], strut);
++        }
++    } else if (readStrut(winclient, m_net->wm_strut, values, 4)) {
++        // Preserve the legacy head-local behavior for clients without PARTIAL.
++        const int head = screen.getHead(winclient);
++        const int width = screen.getHeadWidth(head), height = screen.getHeadHeight(head);
++        int area[4] = {
++            static_cast<int>(std::min(values[0], static_cast<unsigned long>(width))),
++            static_cast<int>(std::min(values[1], static_cast<unsigned long>(width))),
++            static_cast<int>(std::min(values[2], static_cast<unsigned long>(height))),
++            static_cast<int>(std::min(values[3], static_cast<unsigned long>(height)))
++        };
++        EwmhStrut::clamp(width, height, area);
++        strut = screen.requestStrut(head, area[0], area[1], area[2], area[3]);
++    }
++    // Install the new reservations before removing the old ones. Also handles
++    // deleted/zero/invalid properties, without an intermediate full-screen area.
++    winclient.setStrut(strut);
++    screen.updateAvailableWorkspaceArea();
++}
++
++void Ewmh::updateScreenSize(BScreen &screen) {
++    const list<Focusable *> clients = screen.focusControl().creationOrderList().clientList();
++    for (list<Focusable *>::const_iterator it = clients.begin(); it != clients.end(); ++it) {
++        WinClient *client = dynamic_cast<WinClient *>(*it);
++        if (client)
++            updateStrut(*client);
++    }
++    updateGeometry(screen);
++    updateWorkarea(screen);
++}
+ 
+ void Ewmh::updateActions(FluxboxWindow &win) {
+ 
+--- a/src/Ewmh.hh
++++ b/src/Ewmh.hh
+@@ -21,9 +21,10 @@
+ 
+ #include "AtomHandler.hh"
+ #include "FbTk/FbString.hh"
++#include "FbTk/Signal.hh"
+ 
+ /// Implementes Extended Window Manager Hints ( http://www.freedesktop.org/Standards/wm-spec )
+-class Ewmh:public AtomHandler {
++class Ewmh:public AtomHandler, private FbTk::SignalTracker {
+ public:
+ 
+     Ewmh();
+@@ -66,6 +67,7 @@
+     void toggleState(FluxboxWindow &win, Atom state);
+     void toggleState(FluxboxWindow &win, Atom state, WinClient &client);
+     void updateStrut(WinClient &winclient);
++    void updateScreenSize(BScreen &screen);
+     void updateActions(FluxboxWindow &win);
+ 
+     void setupState(FluxboxWindow &win);
+--- a/src/Screen.hh
++++ b/src/Screen.hh
+@@ -414,7 +414,7 @@
+     /// creates a window frame for a winclient. The client is attached to the window
+     FluxboxWindow *createWindow(WinClient &client);
+     /// request workspace space, i.e "don't maximize over this area"
+-    Strut *requestStrut(int head, int left, int right, int top, int bottom);
++    Strut *requestStrut(int head, int left, int right, int top, int bottom, Strut *next = 0);
+     /// remove requested space and destroy strut
+     void clearStrut(Strut *strut);
+     /// updates max avaible area for the workspace
+--- a/src/Screen.cc
++++ b/src/Screen.cc
+@@ -1171,7 +1171,7 @@
+     return win;
+ }
+ 
+-Strut *BScreen::requestStrut(int head, int left, int right, int top, int bottom) {
++Strut *BScreen::requestStrut(int head, int left, int right, int top, int bottom, Strut *next) {
+     if (head > numHeads() && head != 1) {
+         // head does not exist (if head == 1, then numHeads() == 0,
+         // which means no xinerama, but there's a head after all
+@@ -1186,7 +1186,6 @@
+         end = (numHeads() ? numHeads() : 1);
+     }
+ 
+-    Strut* next = 0;
+     for (int i = begin; i != end; i++) {
+         next = m_head_areas[i]->requestStrut(i+1, left, right, top, bottom, next);
+     }
+@@ -1201,6 +1200,8 @@
+     /* The number of heads may have changed, be careful. */
+-    if (head < (numHeads() ? numHeads() : 1))
++    if (static_cast<size_t>(head) < m_head_areas.size())
+         m_head_areas[head]->clearStrut(str);
++    else
++        delete str; // its HeadArea disappeared during a monitor-layout change
+     // str is invalid now
+ }
+ 
+@@ -1516,13 +1517,12 @@
+         // reset background
+         m_root_theme->reset();
+ 
+-        // send resize notify
+-        m_resize_sig.emit(*this);
+-        m_workspace_area_sig.emit(*this);
+-
+-        // move windows out of inactive heads
+-        clearHeads();
+-    }
++    }
++
++    // RandR may change monitor positions without changing the root dimensions.
++    m_resize_sig.emit(*this);
++    m_workspace_area_sig.emit(*this);
++    clearHeads();
+ }
+ 
+ 
+--- a/src/fluxbox.cc
++++ b/src/fluxbox.cc
+@@ -798,7 +798,8 @@
+     default: {
+ 
+ #if defined(HAVE_RANDR) || defined(HAVE_RANDR1_2)
+-        if (e->type == s_randr_event_type) {
++        if (e->type == s_randr_event_type + RRScreenChangeNotify
++            || e->type == s_randr_event_type + RRNotify) {
+ #ifdef HAVE_RANDR1_2
+             XRRUpdateConfiguration(e);
+ #endif
+--- a/src/Makemodule.am
++++ b/src/Makemodule.am
+@@ -80,7 +80,7 @@
+ 
+ if EWMH
+ EWMH_SOURCE = \
+-	src/Ewmh.hh \
++	src/Ewmh.hh src/EwmhStrut.hh \
+ 	src/Ewmh.cc
+ endif
+ 

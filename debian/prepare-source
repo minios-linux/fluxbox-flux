@@ -1,0 +1,27 @@
+#!/bin/sh
+# Recreate the released upstream distribution (including generated manuals),
+# then overlay our quilt packaging. DEST must be outside this checkout.
+set -eu
+[ "$#" -eq 1 ] || { echo "Usage: $0 NEW-SOURCE-DIRECTORY" >&2; exit 2; }
+repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+dest=$(realpath -m -- "$1")
+case "$dest/" in "$repo/"*) echo 'Use a build directory outside the checkout' >&2; exit 2;; esac
+[ ! -e "$dest" ] || { echo "Destination already exists: $dest" >&2; exit 2; }
+parent=$(dirname -- "$dest")
+mkdir -p -- "$parent"
+archive=fluxbox-flux_1.3.7.orig.tar.gz
+hash=c99e2baa06fff1e96342b20415059d12ff1fa2917ade0173c75b2fa570295b9f
+if [ ! -f "$parent/$archive" ]; then
+    tmp=$(mktemp "$parent/.fluxbox-orig.XXXXXX")
+    trap 'rm -f -- "$tmp"' EXIT HUP INT TERM
+    curl --fail --location --silent --show-error --max-time 120 \
+        "https://deb.minios.dev/debian/pool/main/f/fluxbox-flux/$archive" -o "$tmp"
+    printf '%s  %s\n' "$hash" "$tmp" | sha256sum -c -
+    mv -- "$tmp" "$parent/$archive"
+    trap - EXIT HUP INT TERM
+fi
+printf '%s  %s\n' "$hash" "$parent/$archive" | sha256sum -c -
+mkdir -- "$dest"
+tar -xzf "$parent/$archive" --strip-components=1 -C "$dest"
+cp -a -- "$repo/debian" "$dest/debian"
+printf 'Prepared %s\n' "$dest"

@@ -1,0 +1,33 @@
+#!/bin/sh
+# Run inside a disposable 1280x800 X server (for example xvfb-run).
+set -eu
+umask 077
+[ "$(id -u)" -ne 0 ] || { echo 'Run the tests as an unprivileged user' >&2; exit 2; }
+binary=$(realpath "${1:-./fluxbox}")
+test -n "${DISPLAY:-}" || { echo 'A disposable DISPLAY is required' >&2; exit 2; }
+work=$(mktemp -d)
+pid=
+cleanup() {
+    if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi
+    rm -rf -- "$work"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+${CXX:-c++} -std=c++11 -Wall -Wextra debian/tests/x11-struts.cc -lX11 -o "$work/check"
+mkdir "$work/.fluxbox"
+cat > "$work/init" <<END
+session.configVersion: 13
+session.screen0.toolbar.visible: false
+session.screen0.fullMaximization: false
+session.screen0.workspaces: 2
+session.screen0.slit.maxOver: false
+session.screen0.tabs.intitlebar: true
+session.screen0.maxIgnoreIncrement: true
+END
+HOME="$work" "$binary" -rc "$work/init" > "$work/fluxbox.log" 2>&1 &
+pid=$!
+if ! "$work/check"; then cat "$work/fluxbox.log" >&2; exit 1; fi
+kill -0 "$pid"
+if grep -E 'clearStrut\(\) failed|AddressSanitizer|runtime error:' "$work/fluxbox.log"; then
+    exit 1
+fi
