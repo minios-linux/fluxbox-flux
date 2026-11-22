@@ -5,3 +5,4 @@ fix_ld_ftbfs.patch
 replace_FbRootWindow_depth_with_maxDepth.patch
 fluxbox-flux.patch
 ewmh-partial-struts.patch
+toolbar-head-menu-lifetime.patch
